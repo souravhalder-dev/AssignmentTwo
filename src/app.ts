@@ -5,6 +5,7 @@ import express, {
 } from "express";
 import { issuesRoute } from "./modules/issues/issues.route.js";
 import { initDB } from "./db/index.js";
+import { authRoute } from "./modules/auth/auth.route.js";
 
 const app: Application = express();
 
@@ -19,5 +20,5 @@ app.get("/", (req: Request, res: Response) => {
 });
 
 app.use("/api/issues", issuesRoute);
-
+app.use("/api/auth",authRoute);
 export default app;
