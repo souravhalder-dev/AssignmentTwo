@@ -32,6 +32,7 @@ export interface IssueReporter {
   role: UserRole;
 }
 
+
 export interface IssueWithReporter {
   id: number;
   title: string;
