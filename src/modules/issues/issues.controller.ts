@@ -1,337 +1,212 @@
 import type { Request, Response } from "express";
+import { StatusCodes } from "http-status-codes";
 import { issuesService } from "./issues.service.js";
-import type { AuthRequest } from "../../middlewares/middlewares.js";
+import type { AuthRequest } from "../../middleware/auth.js";
+import { AppError } from "../../utils/appError.js";
+import { catchAsync } from "../../utils/catchAsync.js";
+import {
+  sendMessageResponse,
+  sendSuccessResponse,
+} from "../../utils/response.js";
+import {
+  assertEnumValue,
+  assertMinLength,
+  assertNonEmptyString,
+  parseIdOrThrow,
+} from "../../utils/validation.js";
+import {
+  type GetIssuesQuery,
+  type IssueStatus,
+  type IssueType,
+  type UpdateIssuePayload,
+} from "./issues.interface.js";
 
-const isIssueType = (value: unknown): value is "bug" | "feature_request" =>
-  value === "bug" || value === "feature_request";
+const ISSUE_TYPES = ["bug", "feature_request"] as const satisfies readonly IssueType[];
+const ISSUE_STATUSES = ["open", "in_progress", "resolved"] as const satisfies readonly IssueStatus[];
 
-const isIssueStatus = (
-  value: unknown,
-): value is "open" | "in_progress" | "resolved" =>
-  value === "open" || value === "in_progress" || value === "resolved";
+const issuesCreate = catchAsync(async (req: Request, res: Response) => {
+  const authReq = req as AuthRequest;
+  const userId = authReq.user?.id;
 
-const issuesCreate = async (req: AuthRequest, res: Response) => {
-  try {
-    const userId = req.user?.id;
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized",
-        errors: "Missing user in request",
-      });
-    }
-
-    const { title, description, type } = req.body as Partial<{
-      title: unknown;
-      description: unknown;
-      type: unknown;
-    }>;
-
-    if (typeof title !== "string" || title.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "title is required",
-      });
-    }
-
-    if (typeof description !== "string" || description.trim().length < 20) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "description must be at least 20 characters",
-      });
-    }
-
-    if (!isIssueType(type)) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "type must be bug or feature_request",
-      });
-    }
-
-    const result = await issuesService.issuesPostDB(
-      { title: title.trim(), description: description.trim(), type },
-      Number(userId),
+  if (!userId) {
+    throw new AppError(
+      "Unauthorized",
+      StatusCodes.UNAUTHORIZED,
+      "Missing user in request",
     );
-
-    return res.status(201).json({
-      success: true,
-      message: "Issue created successfully",
-      data: result,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Issue creation failed",
-      errors: (error as Error).message,
-    });
   }
-};
 
-const getAllIssues = async (req: Request, res: Response) => {
-  try {
-    const sortRaw = req.query.sort;
-    const typeRaw = req.query.type;
-    const statusRaw = req.query.status;
+  const requestBody = req.body as Partial<{
+    title: unknown;
+    description: unknown;
+    type: unknown;
+  }>;
 
-    const sort =
-      sortRaw === "oldest" || sortRaw === "newest" ? sortRaw : "newest";
+  const title = assertNonEmptyString(requestBody.title, "title");
+  const description = assertNonEmptyString(requestBody.description, "description");
+  assertMinLength(description, 20, "description");
+  const type = assertEnumValue(requestBody.type, ISSUE_TYPES, "type");
 
-    const type = isIssueType(typeRaw) ? typeRaw : undefined;
-    const status = isIssueStatus(statusRaw) ? statusRaw : undefined;
+  const issue = await issuesService.issuesPostDB(
+    { title, description, type },
+    userId,
+  );
 
-    if (typeRaw !== undefined && !type) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "type must be bug or feature_request",
-      });
-    }
+  return sendSuccessResponse(
+    res,
+    StatusCodes.CREATED,
+    "Issue created successfully",
+    issue,
+  );
+});
 
-    if (statusRaw !== undefined && !status) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "status must be open, in_progress, or resolved",
-      });
-    }
+const getAllIssues = catchAsync(async (req: Request, res: Response) => {
+  const sortRaw = req.query.sort;
+  const typeRaw = req.query.type;
+  const statusRaw = req.query.status;
 
-    if (sortRaw !== undefined && sortRaw !== "newest" && sortRaw !== "oldest") {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "sort must be newest or oldest",
-      });
-    }
+  const query: GetIssuesQuery = {
+    sort: "newest",
+  };
 
-    const query: { sort: "newest" | "oldest"; type?: "bug" | "feature_request"; status?: "open" | "in_progress" | "resolved" } =
-      { sort };
-    if (type) query.type = type;
-    if (status) query.status = status;
-
-    const issues = await issuesService.getIssuesDB(query);
-
-    return res.status(200).json({
-      success: true,
-      message: "Issues retrived successfully",
-      data: issues,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch issues",
-      errors: (error as Error).message,
-    });
+  if (sortRaw !== undefined) {
+    query.sort = assertEnumValue(sortRaw, ["newest", "oldest"] as const, "sort");
   }
-};
 
-const getSingleIssue = async (req: Request, res: Response) => {
-  try {
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "Invalid id",
-      });
-    }
-
-    const issue = await issuesService.getIssueByIdDB(id);
-    if (!issue) {
-      return res.status(404).json({
-        success: false,
-        message: "Not Found",
-        errors: "Issue not found",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Issue retrived successfully",
-      data: issue,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch issue",
-      errors: (error as Error).message,
-    });
+  if (typeRaw !== undefined) {
+    query.type = assertEnumValue(typeRaw, ISSUE_TYPES, "type");
   }
-};
 
-const updateIssue = async (req: AuthRequest, res: Response) => {
-  try {
-    const user = req.user;
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized",
-        errors: "Missing user in request",
-      });
-    }
-
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "Invalid id",
-      });
-    }
-
-    const issue = await issuesService.getRawIssueByIdDB(id);
-    if (!issue) {
-      return res.status(404).json({
-        success: false,
-        message: "Not Found",
-        errors: "Issue not found",
-      });
-    }
-
-    if (user.role === "contributor") {
-      if (issue.reporter_id !== user.id) {
-        return res.status(403).json({
-          success: false,
-          message: "Forbidden",
-          errors: "You can only edit your own issues",
-        });
-      }
-      if (issue.status !== "open") {
-        return res.status(409).json({
-          success: false,
-          message: "Conflict",
-          errors: "You can only edit an issue when status is open",
-        });
-      }
-    }
-
-    const { title, description, type } = req.body as Partial<{
-      title: unknown;
-      description: unknown;
-      type: unknown;
-    }>;
-
-    const updatePayload: Partial<{
-      title: string;
-      description: string;
-      type: "bug" | "feature_request";
-    }> = {};
-
-    if (title !== undefined) {
-      if (typeof title !== "string" || title.trim().length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: "Validation error",
-          errors: "title must be a non-empty string",
-        });
-      }
-      updatePayload.title = title.trim();
-    }
-
-    if (description !== undefined) {
-      if (typeof description !== "string" || description.trim().length < 20) {
-        return res.status(400).json({
-          success: false,
-          message: "Validation error",
-          errors: "description must be at least 20 characters",
-        });
-      }
-      updatePayload.description = description.trim();
-    }
-
-    if (type !== undefined) {
-      if (!isIssueType(type)) {
-        return res.status(400).json({
-          success: false,
-          message: "Validation error",
-          errors: "type must be bug or feature_request",
-        });
-      }
-      updatePayload.type = type;
-    }
-
-    if (Object.keys(updatePayload).length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "At least one of title, description, type is required",
-      });
-    }
-
-    const updated = await issuesService.updateIssueDB(id, updatePayload);
-    if (!updated) {
-      return res.status(404).json({
-        success: false,
-        message: "Not Found",
-        errors: "Issue not found",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Issue updated successfully",
-      data: updated,
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Issue update failed",
-      errors: (error as Error).message,
-    });
+  if (statusRaw !== undefined) {
+    query.status = assertEnumValue(statusRaw, ISSUE_STATUSES, "status");
   }
-};
 
-const deleteIssue = async (req: AuthRequest, res: Response) => {
-  try {
-    const user = req.user;
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "Unauthorized",
-        errors: "Missing user in request",
-      });
-    }
+  const issues = await issuesService.getIssuesDB(query);
 
-    if (user.role !== "maintainer") {
-      return res.status(403).json({
-        success: false,
-        message: "Forbidden",
-        errors: "Only maintainer can delete issues",
-      });
-    }
+  return sendSuccessResponse(
+    res,
+    StatusCodes.OK,
+    "Issues retrived successfully",
+    issues,
+  );
+});
 
-    const id = Number(req.params.id);
-    if (!Number.isFinite(id)) {
-      return res.status(400).json({
-        success: false,
-        message: "Validation error",
-        errors: "Invalid id",
-      });
-    }
+const getSingleIssue = catchAsync(async (req: Request, res: Response) => {
+  const id = parseIdOrThrow(req.params.id);
+  const issue = await issuesService.getIssueByIdDB(id);
 
-    const deleted = await issuesService.deleteIssueDB(id);
-    if (!deleted) {
-      return res.status(404).json({
-        success: false,
-        message: "Not Found",
-        errors: "Issue not found",
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Issue deleted successfully",
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Issue delete failed",
-      errors: (error as Error).message,
-    });
+  if (!issue) {
+    throw new AppError("Not Found", StatusCodes.NOT_FOUND, "Issue not found");
   }
-};
+
+  return sendSuccessResponse(
+    res,
+    StatusCodes.OK,
+    "Issue retrived successfully",
+    issue,
+  );
+});
+
+const updateIssue = catchAsync(async (req: Request, res: Response) => {
+  const authReq = req as AuthRequest;
+  const user = authReq.user;
+
+  if (!user) {
+    throw new AppError(
+      "Unauthorized",
+      StatusCodes.UNAUTHORIZED,
+      "Missing user in request",
+    );
+  }
+
+  const id = parseIdOrThrow(req.params.id);
+  const issue = await issuesService.getRawIssueByIdDB(id);
+
+  if (!issue) {
+    throw new AppError("Not Found", StatusCodes.NOT_FOUND, "Issue not found");
+  }
+
+  if (user.role === "contributor" && issue.reporter_id !== user.id) {
+    throw new AppError(
+      "Forbidden",
+      StatusCodes.FORBIDDEN,
+      "You can only edit your own issues",
+    );
+  }
+
+  if (user.role === "contributor" && issue.status !== "open") {
+    throw new AppError(
+      "Conflict",
+      StatusCodes.CONFLICT,
+      "You can only edit an issue when status is open",
+    );
+  }
+
+  const requestBody = req.body as Partial<{
+    title: unknown;
+    description: unknown;
+    type: unknown;
+  }>;
+
+  const updatePayload: UpdateIssuePayload = {};
+
+  if (requestBody.title !== undefined) {
+    updatePayload.title = assertNonEmptyString(requestBody.title, "title");
+  }
+
+  if (requestBody.description !== undefined) {
+    const description = assertNonEmptyString(requestBody.description, "description");
+    assertMinLength(description, 20, "description");
+    updatePayload.description = description;
+  }
+
+  if (requestBody.type !== undefined) {
+    updatePayload.type = assertEnumValue(requestBody.type, ISSUE_TYPES, "type");
+  }
+
+  if (Object.keys(updatePayload).length === 0) {
+    throw new AppError(
+      "Validation error",
+      StatusCodes.BAD_REQUEST,
+      "At least one of title, description, type is required",
+    );
+  }
+
+  const updatedIssue = await issuesService.updateIssueDB(id, updatePayload);
+
+  if (!updatedIssue) {
+    throw new AppError("Not Found", StatusCodes.NOT_FOUND, "Issue not found");
+  }
+
+  return sendSuccessResponse(
+    res,
+    StatusCodes.OK,
+    "Issue updated successfully",
+    updatedIssue,
+  );
+});
+
+const deleteIssue = catchAsync(async (req: Request, res: Response) => {
+  const authReq = req as AuthRequest;
+  const user = authReq.user;
+
+  if (!user) {
+    throw new AppError(
+      "Unauthorized",
+      StatusCodes.UNAUTHORIZED,
+      "Missing user in request",
+    );
+  }
+
+  const id = parseIdOrThrow(req.params.id);
+  const deleted = await issuesService.deleteIssueDB(id);
+
+  if (!deleted) {
+    throw new AppError("Not Found", StatusCodes.NOT_FOUND, "Issue not found");
+  }
+
+  return sendMessageResponse(res, StatusCodes.OK, "Issue deleted successfully");
+});
 
 export const issuesController = {
   issuesCreate,

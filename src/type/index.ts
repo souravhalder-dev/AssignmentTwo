@@ -3,13 +3,13 @@ export const USER_ROLE = {
   maintainer: "maintainer",
 } as const;
 
-export type ROLES = "contributor" | "maintainer";
+export type UserRole = (typeof USER_ROLE)[keyof typeof USER_ROLE];
 
-export interface IUserMiddleware {
+export interface AuthenticatedUser {
   id: number;
   name: string;
   email: string;
-  role: string;
+  role: UserRole;
   created_at: string;
   updated_at: string;
 }

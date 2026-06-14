@@ -1,83 +1,142 @@
 import { pool } from "../../db/index.js";
-const issuesPostDB = async (payLoad) => {
-    const { title, description, type, reporter_id } = payLoad;
+const issuesPostDB = async (payLoad, userId) => {
+    const { title, description, type } = payLoad;
     const result = await pool.query(`
       INSERT INTO issues(title, description, type, reporter_id)
       VALUES($1,$2,$3,$4)
       RETURNING *
-    `, [title, description, type, reporter_id]);
-    return result;
+    `, [title, description, type, userId]);
+    return result.rows[0];
 };
-const issuesGetDB = async (filters) => {
-    const clauses = [];
+const getIssuesDB = async (params) => {
+    const conditions = [];
     const values = [];
-    if (filters?.type) {
-        clauses.push(`type = $${values.length + 1}`);
-        values.push(filters.type);
+    if (params.type) {
+        values.push(params.type);
+        conditions.push(`type = $${values.length}`);
     }
-    if (filters?.status) {
-        clauses.push(`status = $${values.length + 1}`);
-        values.push(filters.status);
+    if (params.status) {
+        values.push(params.status);
+        conditions.push(`status = $${values.length}`);
     }
-    const whereClause = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-    const order = filters?.sort === "oldest" ? "ASC" : "DESC";
-    const result = await pool.query(`
-      SELECT * FROM issues
-      ${whereClause}
-      ORDER BY created_at ${order}
+    const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const orderSql = params.sort === "oldest" ? "ASC" : "DESC";
+    const issuesResult = await pool.query(`
+      SELECT *
+      FROM issues
+      ${whereSql}
+      ORDER BY created_at ${orderSql}
     `, values);
-    return result;
-};
-const issuesParamsDB = async (id) => {
-    const result = await pool.query(`
-      SELECT * FROM issues WHERE id=$1
-    `, [id]);
-    return result;
-};
-const getReportersByIds = async (ids) => {
-    if (ids.length === 0) {
-        return [];
+    const issues = issuesResult.rows;
+    const reporterIds = Array.from(new Set(issues.map((i) => i.reporter_id)));
+    if (reporterIds.length === 0) {
+        return issues.map((i) => ({
+            id: i.id,
+            title: i.title,
+            description: i.description,
+            type: i.type,
+            status: i.status,
+            reporter: null,
+            created_at: i.created_at,
+            updated_at: i.updated_at,
+        }));
     }
-    const result = await pool.query(`
-      SELECT id, name, role FROM users WHERE id = ANY($1)
-    `, [ids]);
-    return result.rows;
+    const reportersResult = await pool.query(`
+      SELECT id, name, role
+      FROM users
+      WHERE id = ANY($1)
+    `, [reporterIds]);
+    const reporterById = new Map();
+    for (const r of reportersResult.rows)
+        reporterById.set(r.id, r);
+    return issues.map((i) => ({
+        id: i.id,
+        title: i.title,
+        description: i.description,
+        type: i.type,
+        status: i.status,
+        reporter: reporterById.get(i.reporter_id) ?? null,
+        created_at: i.created_at,
+        updated_at: i.updated_at,
+    }));
 };
-const issuesUpdateDB = async (payLoad, id) => {
-    const { title, description, type, status, reporter_id } = payLoad;
+const getIssueByIdDB = async (id) => {
+    const issueResult = await pool.query(`
+      SELECT *
+      FROM issues
+      WHERE id=$1
+      LIMIT 1
+    `, [id]);
+    const issue = issueResult.rows[0];
+    if (!issue)
+        return null;
+    const reporterResult = await pool.query(`
+      SELECT id, name, role
+      FROM users
+      WHERE id=$1
+      LIMIT 1
+    `, [issue.reporter_id]);
+    const reporter = reporterResult.rows[0] ?? null;
+    return {
+        id: issue.id,
+        title: issue.title,
+        description: issue.description,
+        type: issue.type,
+        status: issue.status,
+        reporter,
+        created_at: issue.created_at,
+        updated_at: issue.updated_at,
+    };
+};
+const getRawIssueByIdDB = async (id) => {
+    const issueResult = await pool.query(`
+      SELECT *
+      FROM issues
+      WHERE id=$1
+      LIMIT 1
+    `, [id]);
+    return issueResult.rows[0] ?? null;
+};
+const updateIssueDB = async (id, payLoad) => {
+    const fields = [];
+    const values = [];
+    if (payLoad.title !== undefined) {
+        values.push(payLoad.title);
+        fields.push(`title = $${values.length}`);
+    }
+    if (payLoad.description !== undefined) {
+        values.push(payLoad.description);
+        fields.push(`description = $${values.length}`);
+    }
+    if (payLoad.type !== undefined) {
+        values.push(payLoad.type);
+        fields.push(`type = $${values.length}`);
+    }
+    if (fields.length === 0)
+        return null;
+    const setSql = `${fields.join(", ")}, updated_at = CURRENT_TIMESTAMP`;
+    values.push(id);
     const result = await pool.query(`
       UPDATE issues
-      SET
-        title = COALESCE($1, title),
-        description = COALESCE($2, description),
-        type = COALESCE($3, type),
-        status = COALESCE($4, status),
-        reporter_id = COALESCE($5, reporter_id),
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $6
+      SET ${setSql}
+      WHERE id = $${values.length}
       RETURNING *
-    `, [
-        title ?? null,
-        description ?? null,
-        type ?? null,
-        status ?? null,
-        reporter_id ?? null,
-        id,
-    ]);
-    return result;
+    `, values);
+    return result.rows[0] ?? null;
 };
-const issuesDelete = async (id) => {
+const deleteIssueDB = async (id) => {
     const result = await pool.query(`
-      DELETE FROM issues WHERE id=$1 RETURNING *
+      DELETE FROM issues
+      WHERE id=$1
     `, [id]);
-    return result;
+    return (result.rowCount ?? 0) > 0;
 };
 export const issuesService = {
     issuesPostDB,
-    issuesGetDB,
-    issuesParamsDB,
-    getReportersByIds,
-    issuesUpdateDB,
-    issuesDelete,
+    getIssuesDB,
+    getIssueByIdDB,
+    getRawIssueByIdDB,
+    updateIssueDB,
+    deleteIssueDB,
 };
 //# sourceMappingURL=issues.service.js.map

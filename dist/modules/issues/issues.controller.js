@@ -1,235 +1,288 @@
 import { issuesService } from "./issues.service.js";
+const isIssueType = (value) => value === "bug" || value === "feature_request";
+const isIssueStatus = (value) => value === "open" || value === "in_progress" || value === "resolved";
 const issuesCreate = async (req, res) => {
     try {
-        const { title, description, type } = req.body;
-        const user = req.user;
-        if (!title || !description || !type) {
-            return res.status(400).json({
-                success: false,
-                message: "Missing required fields: title, description, type",
-            });
-        }
-        if (!user?.id) {
-            return res.status(401).json({
-                success: false,
-                message: "Unauthorized: reporter_id not available from token",
-            });
-        }
-        if (user.role !== "contributor" && user.role !== "maintainer") {
-            return res.status(403).json({
-                success: false,
-                message: "Insufficient permissions to create issues",
-            });
-        }
-        const result = await issuesService.issuesPostDB({
-            title,
-            description,
-            type,
-            reporter_id: user.id,
-        });
-        res.status(201).json({
-            success: true,
-            message: "Issue created successfully",
-            data: result.rows[0],
-        });
-    }
-    catch (error) {
-        res.status(500).json({
-            success: false,
-            message: "Issue creation failed",
-            error: error.message,
-        });
-    }
-};
-const issuesGet = async (req, res) => {
-    try {
-        const sort = req.query.sort ?? "newest";
-        const type = req.query.type;
-        const status = req.query.status;
-        const allowedSort = ["newest", "oldest"];
-        const allowedType = ["bug", "feature_request"];
-        const allowedStatus = ["open", "in_progress", "resolved"];
-        if (sort && !allowedSort.includes(sort)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid sort value",
-            });
-        }
-        if (type && !allowedType.includes(type)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid type filter",
-            });
-        }
-        if (status && !allowedStatus.includes(status)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid status filter",
-            });
-        }
-        const filters = {
-            sort: sort,
-        };
-        if (type) {
-            filters.type = type;
-        }
-        if (status) {
-            filters.status = status;
-        }
-        const issuesResult = await issuesService.issuesGetDB(filters);
-        const issues = issuesResult.rows;
-        const reporterIds = [
-            ...new Set(issues.map((issue) => issue.reporter_id).filter(Boolean)),
-        ];
-        const reporters = await issuesService.getReportersByIds(reporterIds);
-        const reporterMap = new Map(reporters.map((reporter) => [reporter.id, reporter]));
-        const data = issues.map((issue) => ({
-            id: issue.id,
-            title: issue.title,
-            description: issue.description,
-            type: issue.type,
-            status: issue.status,
-            reporter: reporterMap.get(issue.reporter_id) ?? null,
-            created_at: issue.created_at,
-            updated_at: issue.updated_at,
-        }));
-        res.status(200).json({
-            success: true,
-            message: "Issues retrieved successfully",
-            data,
-        });
-    }
-    catch (error) {
-        res.status(500).json({
-            success: false,
-            message: "Failed to retrieve issues",
-            error: error.message,
-        });
-    }
-};
-const issuesParams = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const issueResult = await issuesService.issuesParamsDB(id);
-        if (issueResult.rowCount === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "Issue not found",
-            });
-        }
-        const issue = issueResult.rows[0];
-        const reporters = await issuesService.getReportersByIds([
-            issue.reporter_id,
-        ]);
-        const reporter = reporters[0] ?? null;
-        res.status(200).json({
-            success: true,
-            message: "Issue retrieved successfully",
-            data: {
-                id: issue.id,
-                title: issue.title,
-                description: issue.description,
-                type: issue.type,
-                status: issue.status,
-                reporter,
-                created_at: issue.created_at,
-                updated_at: issue.updated_at,
-            },
-        });
-    }
-    catch (error) {
-        res.status(500).json({
-            success: false,
-            message: "Failed to retrieve issue",
-            error: error.message,
-        });
-    }
-};
-const issuesUpdate = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const user = req.user;
-        if (!user?.id || !user.role) {
+        const userId = req.user?.id;
+        if (!userId) {
             return res.status(401).json({
                 success: false,
                 message: "Unauthorized",
-            });
-        }
-        const issueResult = await issuesService.issuesParamsDB(id);
-        if (issueResult.rowCount === 0) {
-            return res.status(404).json({
-                success: false,
-                message: "Issue not found",
-            });
-        }
-        const issue = issueResult.rows[0];
-        const isMaintainer = user.role === "maintainer";
-        const isOwnOpenIssue = user.role === "contributor" &&
-            issue.reporter_id === user.id &&
-            issue.status === "open";
-        if (!isMaintainer && !isOwnOpenIssue) {
-            return res.status(403).json({
-                success: false,
-                message: "Insufficient permissions to update this issue",
+                errors: "Missing user in request",
             });
         }
         const { title, description, type } = req.body;
-        if (!title && !description && !type) {
+        if (typeof title !== "string" || title.trim().length === 0) {
             return res.status(400).json({
                 success: false,
-                message: "At least one field is required to update",
+                message: "Validation error",
+                errors: "title is required",
             });
         }
-        const result = await issuesService.issuesUpdateDB({ title, description, type }, id);
-        res.status(200).json({
+        if (typeof description !== "string" || description.trim().length < 20) {
+            return res.status(400).json({
+                success: false,
+                message: "Validation error",
+                errors: "description must be at least 20 characters",
+            });
+        }
+        if (!isIssueType(type)) {
+            return res.status(400).json({
+                success: false,
+                message: "Validation error",
+                errors: "type must be bug or feature_request",
+            });
+        }
+        const result = await issuesService.issuesPostDB({ title: title.trim(), description: description.trim(), type }, Number(userId));
+        return res.status(201).json({
             success: true,
-            message: "Issue updated successfully",
-            data: result.rows[0],
+            message: "Issue created successfully",
+            data: result,
         });
     }
     catch (error) {
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
-            message: "Issue update failed",
-            error: error.message,
+            message: "Issue creation failed",
+            errors: error.message,
         });
     }
 };
-const issuesDelete = async (req, res) => {
+const getAllIssues = async (req, res) => {
     try {
-        const { id } = req.params;
-        const user = req.user;
-        if (!user?.id || user.role !== "maintainer") {
-            return res.status(403).json({
+        const sortRaw = req.query.sort;
+        const typeRaw = req.query.type;
+        const statusRaw = req.query.status;
+        const sort = sortRaw === "oldest" || sortRaw === "newest" ? sortRaw : "newest";
+        const type = isIssueType(typeRaw) ? typeRaw : undefined;
+        const status = isIssueStatus(statusRaw) ? statusRaw : undefined;
+        if (typeRaw !== undefined && !type) {
+            return res.status(400).json({
                 success: false,
-                message: "Only maintainers can delete issues",
+                message: "Validation error",
+                errors: "type must be bug or feature_request",
             });
         }
-        const result = await issuesService.issuesDelete(id);
-        if (result.rowCount === 0) {
+        if (statusRaw !== undefined && !status) {
+            return res.status(400).json({
+                success: false,
+                message: "Validation error",
+                errors: "status must be open, in_progress, or resolved",
+            });
+        }
+        if (sortRaw !== undefined && sortRaw !== "newest" && sortRaw !== "oldest") {
+            return res.status(400).json({
+                success: false,
+                message: "Validation error",
+                errors: "sort must be newest or oldest",
+            });
+        }
+        const query = { sort };
+        if (type)
+            query.type = type;
+        if (status)
+            query.status = status;
+        const issues = await issuesService.getIssuesDB(query);
+        return res.status(200).json({
+            success: true,
+            message: "Issues retrived successfully",
+            data: issues,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch issues",
+            errors: error.message,
+        });
+    }
+};
+const getSingleIssue = async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Validation error",
+                errors: "Invalid id",
+            });
+        }
+        const issue = await issuesService.getIssueByIdDB(id);
+        if (!issue) {
             return res.status(404).json({
                 success: false,
-                message: "Issue not found",
+                message: "Not Found",
+                errors: "Issue not found",
             });
         }
-        res.status(200).json({
+        return res.status(200).json({
+            success: true,
+            message: "Issue retrived successfully",
+            data: issue,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch issue",
+            errors: error.message,
+        });
+    }
+};
+const updateIssue = async (req, res) => {
+    try {
+        const user = req.user;
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized",
+                errors: "Missing user in request",
+            });
+        }
+        const id = Number(req.params.id);
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Validation error",
+                errors: "Invalid id",
+            });
+        }
+        const issue = await issuesService.getRawIssueByIdDB(id);
+        if (!issue) {
+            return res.status(404).json({
+                success: false,
+                message: "Not Found",
+                errors: "Issue not found",
+            });
+        }
+        if (user.role === "contributor") {
+            if (issue.reporter_id !== user.id) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Forbidden",
+                    errors: "You can only edit your own issues",
+                });
+            }
+            if (issue.status !== "open") {
+                return res.status(409).json({
+                    success: false,
+                    message: "Conflict",
+                    errors: "You can only edit an issue when status is open",
+                });
+            }
+        }
+        const { title, description, type } = req.body;
+        const updatePayload = {};
+        if (title !== undefined) {
+            if (typeof title !== "string" || title.trim().length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Validation error",
+                    errors: "title must be a non-empty string",
+                });
+            }
+            updatePayload.title = title.trim();
+        }
+        if (description !== undefined) {
+            if (typeof description !== "string" || description.trim().length < 20) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Validation error",
+                    errors: "description must be at least 20 characters",
+                });
+            }
+            updatePayload.description = description.trim();
+        }
+        if (type !== undefined) {
+            if (!isIssueType(type)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Validation error",
+                    errors: "type must be bug or feature_request",
+                });
+            }
+            updatePayload.type = type;
+        }
+        if (Object.keys(updatePayload).length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: "Validation error",
+                errors: "At least one of title, description, type is required",
+            });
+        }
+        const updated = await issuesService.updateIssueDB(id, updatePayload);
+        if (!updated) {
+            return res.status(404).json({
+                success: false,
+                message: "Not Found",
+                errors: "Issue not found",
+            });
+        }
+        return res.status(200).json({
+            success: true,
+            message: "Issue updated successfully",
+            data: updated,
+        });
+    }
+    catch (error) {
+        return res.status(500).json({
+            success: false,
+            message: "Issue update failed",
+            errors: error.message,
+        });
+    }
+};
+const deleteIssue = async (req, res) => {
+    try {
+        const user = req.user;
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized",
+                errors: "Missing user in request",
+            });
+        }
+        if (user.role !== "maintainer") {
+            return res.status(403).json({
+                success: false,
+                message: "Forbidden",
+                errors: "Only maintainer can delete issues",
+            });
+        }
+        const id = Number(req.params.id);
+        if (!Number.isFinite(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Validation error",
+                errors: "Invalid id",
+            });
+        }
+        const deleted = await issuesService.deleteIssueDB(id);
+        if (!deleted) {
+            return res.status(404).json({
+                success: false,
+                message: "Not Found",
+                errors: "Issue not found",
+            });
+        }
+        return res.status(200).json({
             success: true,
             message: "Issue deleted successfully",
         });
     }
     catch (error) {
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
             message: "Issue delete failed",
-            error: error.message,
+            errors: error.message,
         });
     }
 };
 export const issuesController = {
     issuesCreate,
-    issuesGet,
-    issuesParams,
-    issuesUpdate,
-    issuesDelete,
+    getAllIssues,
+    getSingleIssue,
+    updateIssue,
+    deleteIssue,
 };
 //# sourceMappingURL=issues.controller.js.map

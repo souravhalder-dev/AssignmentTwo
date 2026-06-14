@@ -1,32 +1,20 @@
 import { pool } from "../../db/index.js";
-import type { typeIssue } from "./issues.interface.js";
-
-type IssueStatus = "open" | "in_progress" | "resolved";
-type IssueType = "bug" | "feature_request";
-
-export type IssueRow = {
-  id: number;
-  title: string;
-  description: string;
-  type: IssueType;
-  status: IssueStatus;
-  reporter_id: number;
-  created_at: string;
-  updated_at: string;
-};
-
-type ReporterPublic = { id: number; name: string; role: string };
-
-export type IssueWithReporter = Omit<IssueRow, "reporter_id"> & {
-  reporter: ReporterPublic | null;
-};
+import { addWhereCondition } from "../../utils/sql.js";
+import type {
+  CreateIssuePayload,
+  GetIssuesQuery,
+  IssueEntity,
+  IssueReporter,
+  IssueWithReporter,
+  UpdateIssuePayload,
+} from "./issues.interface.js";
 
 const issuesPostDB = async (
-  payLoad: Pick<typeIssue, "title" | "description" | "type">,
+  payload: CreateIssuePayload,
   userId: number,
-): Promise<IssueRow> => {
-  const { title, description, type } = payLoad;
-  const result = await pool.query<IssueRow>(
+): Promise<IssueEntity> => {
+  const { title, description, type } = payload;
+  const result = await pool.query<IssueEntity>(
     `
       INSERT INTO issues(title, description, type, reporter_id)
       VALUES($1,$2,$3,$4)
@@ -34,31 +22,25 @@ const issuesPostDB = async (
     `,
     [title, description, type, userId],
   );
-  return result.rows[0] as IssueRow;
+  return result.rows[0] as IssueEntity;
 };
 
-const getIssuesDB = async (params: {
-  sort: "newest" | "oldest";
-  type?: IssueType;
-  status?: IssueStatus;
-}): Promise<IssueWithReporter[]> => {
+const getIssuesDB = async (params: GetIssuesQuery): Promise<IssueWithReporter[]> => {
   const conditions: string[] = [];
   const values: unknown[] = [];
 
   if (params.type) {
-    values.push(params.type);
-    conditions.push(`type = $${values.length}`);
+    addWhereCondition(conditions, values, "type", params.type);
   }
 
   if (params.status) {
-    values.push(params.status);
-    conditions.push(`status = $${values.length}`);
+    addWhereCondition(conditions, values, "status", params.status);
   }
 
   const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const orderSql = params.sort === "oldest" ? "ASC" : "DESC";
 
-  const issuesResult = await pool.query<IssueRow>(
+  const issuesResult = await pool.query<IssueEntity>(
     `
       SELECT *
       FROM issues
@@ -83,7 +65,7 @@ const getIssuesDB = async (params: {
     }));
   }
 
-  const reportersResult = await pool.query<ReporterPublic>(
+  const reportersResult = await pool.query<IssueReporter>(
     `
       SELECT id, name, role
       FROM users
@@ -92,7 +74,7 @@ const getIssuesDB = async (params: {
     [reporterIds],
   );
 
-  const reporterById = new Map<number, ReporterPublic>();
+  const reporterById = new Map<number, IssueReporter>();
   for (const r of reportersResult.rows) reporterById.set(r.id, r);
 
   return issues.map((i) => ({
@@ -108,7 +90,7 @@ const getIssuesDB = async (params: {
 };
 
 const getIssueByIdDB = async (id: number): Promise<IssueWithReporter | null> => {
-  const issueResult = await pool.query<IssueRow>(
+  const issueResult = await pool.query<IssueEntity>(
     `
       SELECT *
       FROM issues
@@ -121,7 +103,7 @@ const getIssueByIdDB = async (id: number): Promise<IssueWithReporter | null> => 
   const issue = issueResult.rows[0];
   if (!issue) return null;
 
-  const reporterResult = await pool.query<ReporterPublic>(
+  const reporterResult = await pool.query<IssueReporter>(
     `
       SELECT id, name, role
       FROM users
@@ -145,8 +127,8 @@ const getIssueByIdDB = async (id: number): Promise<IssueWithReporter | null> => 
   };
 };
 
-const getRawIssueByIdDB = async (id: number): Promise<IssueRow | null> => {
-  const issueResult = await pool.query<IssueRow>(
+const getRawIssueByIdDB = async (id: number): Promise<IssueEntity | null> => {
+  const issueResult = await pool.query<IssueEntity>(
     `
       SELECT *
       FROM issues
@@ -161,23 +143,23 @@ const getRawIssueByIdDB = async (id: number): Promise<IssueRow | null> => {
 
 const updateIssueDB = async (
   id: number,
-  payLoad: Partial<Pick<typeIssue, "title" | "description" | "type">>,
-): Promise<IssueRow | null> => {
+  payload: UpdateIssuePayload,
+): Promise<IssueEntity | null> => {
   const fields: string[] = [];
   const values: unknown[] = [];
 
-  if (payLoad.title !== undefined) {
-    values.push(payLoad.title);
+  if (payload.title !== undefined) {
+    values.push(payload.title);
     fields.push(`title = $${values.length}`);
   }
 
-  if (payLoad.description !== undefined) {
-    values.push(payLoad.description);
+  if (payload.description !== undefined) {
+    values.push(payload.description);
     fields.push(`description = $${values.length}`);
   }
 
-  if (payLoad.type !== undefined) {
-    values.push(payLoad.type);
+  if (payload.type !== undefined) {
+    values.push(payload.type);
     fields.push(`type = $${values.length}`);
   }
 
@@ -186,7 +168,7 @@ const updateIssueDB = async (
   const setSql = `${fields.join(", ")}, updated_at = CURRENT_TIMESTAMP`;
   values.push(id);
 
-  const result = await pool.query<IssueRow>(
+  const result = await pool.query<IssueEntity>(
     `
       UPDATE issues
       SET ${setSql}

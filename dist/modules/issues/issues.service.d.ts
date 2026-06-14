@@ -1,14 +1,35 @@
 import type { typeIssue } from "./issues.interface.js";
-export declare const issuesService: {
-    issuesPostDB: (payLoad: typeIssue) => Promise<import("pg").QueryResult<any>>;
-    issuesGetDB: (filters?: {
-        sort?: "newest" | "oldest";
-        type?: "bug" | "feature_request";
-        status?: "open" | "in_progress" | "resolved";
-    }) => Promise<import("pg").QueryResult<any>>;
-    issuesParamsDB: (id: string) => Promise<import("pg").QueryResult<any>>;
-    getReportersByIds: (ids: number[]) => Promise<any[]>;
-    issuesUpdateDB: (payLoad: Partial<typeIssue>, id: string) => Promise<import("pg").QueryResult<any>>;
-    issuesDelete: (id: string) => Promise<import("pg").QueryResult<any>>;
+type IssueStatus = "open" | "in_progress" | "resolved";
+type IssueType = "bug" | "feature_request";
+export type IssueRow = {
+    id: number;
+    title: string;
+    description: string;
+    type: IssueType;
+    status: IssueStatus;
+    reporter_id: number;
+    created_at: string;
+    updated_at: string;
 };
+type ReporterPublic = {
+    id: number;
+    name: string;
+    role: string;
+};
+export type IssueWithReporter = Omit<IssueRow, "reporter_id"> & {
+    reporter: ReporterPublic | null;
+};
+export declare const issuesService: {
+    issuesPostDB: (payLoad: Pick<typeIssue, "title" | "description" | "type">, userId: number) => Promise<IssueRow>;
+    getIssuesDB: (params: {
+        sort: "newest" | "oldest";
+        type?: IssueType;
+        status?: IssueStatus;
+    }) => Promise<IssueWithReporter[]>;
+    getIssueByIdDB: (id: number) => Promise<IssueWithReporter | null>;
+    getRawIssueByIdDB: (id: number) => Promise<IssueRow | null>;
+    updateIssueDB: (id: number, payLoad: Partial<Pick<typeIssue, "title" | "description" | "type">>) => Promise<IssueRow | null>;
+    deleteIssueDB: (id: number) => Promise<boolean>;
+};
+export {};
 //# sourceMappingURL=issues.service.d.ts.map

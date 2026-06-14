@@ -2,7 +2,7 @@ import { Router } from "express";
 import { issuesController } from "./issues.controller.js";
 
 import { USER_ROLE } from "../../type/index.js";
-import auth from "../../middlewares/middlewares.js";
+import auth from "../../middleware/auth.js";
 
 const route = Router();
 
