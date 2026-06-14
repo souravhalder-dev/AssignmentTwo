@@ -5,7 +5,7 @@ Backend API for user authentication and issue tracking, built with Node.js, Expr
 ## Project Overview
 
 - **Project Name:** Assignment Two API
-- **Live URL:** Not deployed yet. Add your deployed API URL here.
+- **Live URL:** `https://assignment-two-eta-three.vercel.app/`
 - **Local URL:** `http://localhost:5000`
 
 ## Features
