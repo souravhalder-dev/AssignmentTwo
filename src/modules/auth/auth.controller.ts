@@ -3,36 +3,120 @@ import { authService } from "./auth.service.js";
 
 const registerUser = async (req: Request, res: Response) => {
   try {
-    const result = await authService.regUser(req.body);
+    const { name, email, password, role } = req.body as Partial<{
+      name: unknown;
+      email: unknown;
+      password: unknown;
+      role: unknown;
+    }>;
+
+    if (typeof name !== "string" || name.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation error",
+        errors: "name is required",
+      });
+    }
+
+    if (typeof email !== "string" || email.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation error",
+        errors: "email is required",
+      });
+    }
+
+    if (typeof password !== "string" || password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation error",
+        errors: "password must be at least 8 characters",
+      });
+    }
+
+    if (role !== "contributor" && role !== "maintainer") {
+      return res.status(400).json({
+        success: false,
+        message: "Validation error",
+        errors: "role must be contributor or maintainer",
+      });
+    }
+
+    const result = await authService.regUser({
+      name: name.trim(),
+      email: email.trim(),
+      password,
+      role,
+    });
 
     res.status(201).json({
       success: true,
-      message: "User registered successfully !",
+      message: "User registered successfully",
       data: result.rows[0],
     });
   } catch (error) {
-    res.status(500).json({
+    const err = error as { code?: string; message: string };
+
+    if (err.code === "23505") {
+      return res.status(409).json({
+        success: false,
+        message: "Conflict",
+        errors: "Email already exists",
+      });
+    }
+
+    return res.status(500).json({
       success: false,
-      message: "Issue creation failed",
-      error: (error as Error).message,
+      message: "User registration failed",
+      errors: err.message,
     });
   }
 };
 
 const loginUser = async (req: Request, res: Response) => {
   try {
-    const result = await authService.loginUser(req.body);
+    const { email, password } = req.body as Partial<{
+      email: unknown;
+      password: unknown;
+    }>;
 
-    res.status(201).json({
+    if (typeof email !== "string" || email.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation error",
+        errors: "email is required",
+      });
+    }
+
+    if (typeof password !== "string" || password.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Validation error",
+        errors: "password is required",
+      });
+    }
+
+    const result = await authService.loginUser({ email: email.trim(), password });
+
+    res.status(200).json({
       success: true,
-      message: "User Login successful!",
+      message: "Login successful",
       data: result,
     });
   } catch (error) {
-    res.status(500).json({
+    const err = error as Error;
+    if (err.message === "Invalid Credentials!") {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+        errors: "Invalid email or password",
+      });
+    }
+
+    return res.status(500).json({
       success: false,
-      message: "Issue creation failed",
-      error: (error as Error).message,
+      message: "Login failed",
+      errors: err.message,
     });
   }
 };

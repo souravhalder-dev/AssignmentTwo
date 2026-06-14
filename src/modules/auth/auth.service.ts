@@ -16,6 +16,10 @@ const regUser = async (payLoad: Iuser) => {
     [name, email, hashPassword, role],
   );
 
+  if (result.rows.length === 0) {
+    throw new Error("Invalid Credentials!");
+  }
+
   delete result.rows[0].password;
 
   return result;
@@ -41,7 +45,6 @@ const loginUser = async (payload: { email: string; password: string }) => {
   // 2. Compare the password -> Done
   const user = userData.rows[0];
   const matchPassword = await bcrypt.compare(password, user.password);
-  console.log(user);
 
   if (!matchPassword) {
     throw new Error("Invalid Credentials!");
@@ -55,11 +58,11 @@ const loginUser = async (payload: { email: string; password: string }) => {
     role: user.role,
   };
 
-  const accessToken = jwt.sign(jwtpayload, config.secret as string, {
+  const token = jwt.sign(jwtpayload, config.secret as string, {
     expiresIn: "1d",
   });
 
-  return { accessToken, user };
+  return { token, user };
 };
 
 export const authService = {
